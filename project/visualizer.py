@@ -1,6 +1,6 @@
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore, QtGui
+from pyqtgraph.Qt import QtCore, QtWidgets
 import sys
 from data_reader import CapacitiveDataReader
 
@@ -54,7 +54,7 @@ class CapacitiveVisualizer:
             dt = self.last_time.msecsTo(current_time)
             if dt > 0:
                 fps = 1000.0 / dt
-                self.fps_label.setText(".1f")
+                self.fps_label.setText(f"FPS: {fps:.1f}")
             self.last_time = current_time
 
     def update_recognition(self, result):
@@ -63,7 +63,7 @@ class CapacitiveVisualizer:
 
 def main():
     # 创建应用
-    app = QtGui.QApplication(sys.argv)
+    app = QtWidgets.QApplication(sys.argv)
 
     # 创建可视化器
     visualizer = CapacitiveVisualizer()

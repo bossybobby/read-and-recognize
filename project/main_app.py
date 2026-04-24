@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore, QtGui
+from pyqtgraph.Qt import QtCore, QtWidgets
 from data_reader import CapacitiveDataReader
 from digit_recognizer import DigitRecognizer
 
@@ -73,11 +73,11 @@ class CapacitiveSensorApp:
         dt = self.last_time.msecsTo(current_time)
         if dt > 0:
             fps = 1000.0 / dt
-            self.fps_label.setText(".1f")
+            self.fps_label.setText(f"FPS: {fps:.1f}")
         self.last_time = current_time
 
 def main():
-    app = QtGui.QApplication(sys.argv)
+    app = QtWidgets.QApplication(sys.argv)
     sensor_app = CapacitiveSensorApp()
 
     if __name__ == '__main__':
