@@ -1,8 +1,6 @@
-numpy
-scipy
 opencv-python
+numpy
 pyqtgraph
-matplotlib
+mss
 torch
 torchvision
-tensorflow
