@@ -1,6 +1,8 @@
 opencv-python
 numpy
 pyqtgraph
+PyQt5
 mss
 torch
-torchvision
+scikit-learn
+joblib

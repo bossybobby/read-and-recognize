@@ -60,8 +60,10 @@ class ScreenCaptureReader:
         if frame is None or frame.size == 0:
             return np.zeros(self.grid_shape, dtype=np.int32)
 
-        # 修改色彩提取逻辑，默认使用灰度
-        if self.value_mode == "value":
+        # Extract the selected signal plane before resizing into the sensor grid.
+        if self.value_mode == "color-diff":
+            plane = self._color_difference_plane(frame)
+        elif self.value_mode == "value":
             hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
             plane = hsv[:, :, 2]
         elif self.value_mode == "saturation":
@@ -83,3 +85,26 @@ class ScreenCaptureReader:
             grid = grid / max_value
         return np.rint(grid * 1000).astype(np.int32)
 
+    @staticmethod
+    def _color_difference_plane(frame: np.ndarray) -> np.ndarray:
+        frame_float = frame.astype(np.float32)
+        height, width, _ = frame_float.shape
+        border_size = max(1, min(height, width) // 20)
+
+        border_pixels = np.concatenate(
+            [
+                frame_float[:border_size, :, :].reshape(-1, 3),
+                frame_float[-border_size:, :, :].reshape(-1, 3),
+                frame_float[:, :border_size, :].reshape(-1, 3),
+                frame_float[:, -border_size:, :].reshape(-1, 3),
+            ],
+            axis=0,
+        )
+        background = np.median(border_pixels, axis=0)
+        diff = np.linalg.norm(frame_float - background, axis=2)
+
+        diff -= diff.min()
+        max_value = diff.max()
+        if max_value > 0:
+            diff = diff / max_value * 255.0
+        return diff.astype(np.uint8)
