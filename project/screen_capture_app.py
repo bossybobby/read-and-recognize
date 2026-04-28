@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from screen_capture_reader import CaptureRegion, ScreenCaptureReader
-from digit_recognizer import DigitRecognizer  # 假设这是你的识别器类
+from digit_recognizer import DigitRecognizer
 
 
 class RegionSelector(QtWidgets.QWidget):
@@ -88,9 +88,12 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         self.resize(1100, 720)
 
         self.grid_shape = (8, 8)
-        self.reader = ScreenCaptureReader(grid_shape=self.grid_shape, value_mode="gray")
+        self.reader = ScreenCaptureReader(grid_shape=self.grid_shape, value_mode="saturation")
         self.region: Optional[CaptureRegion] = None
         self.latest_preview: Optional[np.ndarray] = None
+        self.background_frame: Optional[np.ndarray] = None
+        self.stroke_grid: Optional[np.ndarray] = None
+        self.stroke_mode = False
         self.frame_count = 0
         self.last_time = QtCore.QTime.currentTime()
 
@@ -111,8 +114,11 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         controls = QtWidgets.QHBoxLayout()
         self.btn_select = QtWidgets.QPushButton("选择区域")
         self.btn_pause = QtWidgets.QPushButton("暂停")
+        self.stroke_checkbox = QtWidgets.QCheckBox("笔画识别")
+        self.btn_capture_bg = QtWidgets.QPushButton("取背景")
+        self.btn_clear_stroke = QtWidgets.QPushButton("清空笔画")
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["gray", "saturation", "value", "color-diff"])
+        self.mode_combo.addItems(["saturation", "red-force", "gray", "value", "color-diff"])
         self.grid_combo = QtWidgets.QComboBox()
         self.grid_combo.addItems(self.GRID_SHAPES.keys())
         self.fps_combo = QtWidgets.QComboBox()
@@ -126,6 +132,9 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
 
         controls.addWidget(self.btn_select)
         controls.addWidget(self.btn_pause)
+        controls.addWidget(self.stroke_checkbox)
+        controls.addWidget(self.btn_capture_bg)
+        controls.addWidget(self.btn_clear_stroke)
         controls.addWidget(QtWidgets.QLabel("通道:"))
         controls.addWidget(self.mode_combo)
         controls.addWidget(QtWidgets.QLabel("阵列:"))
@@ -162,6 +171,9 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
 
         self.btn_select.clicked.connect(self.select_region)
         self.btn_pause.clicked.connect(self.toggle_pause)
+        self.stroke_checkbox.toggled.connect(self.toggle_stroke_mode)
+        self.btn_capture_bg.clicked.connect(self.capture_background)
+        self.btn_clear_stroke.clicked.connect(self.clear_stroke)
         self.mode_combo.currentTextChanged.connect(self.change_value_mode)
         self.grid_combo.currentTextChanged.connect(self.change_grid_shape)
         self.fps_combo.currentTextChanged.connect(self.change_max_fps)
@@ -173,6 +185,8 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
 
     def set_region(self, region: CaptureRegion):
         self.region = region.normalized()
+        self.background_frame = None
+        self.stroke_grid = None
         self.region_label.setText(
             f"区域: {self.region.left},{self.region.top} {self.region.width}x{self.region.height}"
         )
@@ -188,11 +202,16 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
 
     def change_value_mode(self, mode: str):
         self.reader.value_mode = mode
+        self.background_frame = None
+        self.stroke_grid = None
+        if self.stroke_mode:
+            self.prediction_label.setText("预测: 请重新取背景")
 
     def change_grid_shape(self, grid_name: str):
         self.grid_shape = self.GRID_SHAPES[grid_name]
         self.reader.grid_shape = self.grid_shape
         self.recognizer.set_grid_shape(self.grid_shape, auto_train=False)
+        self.stroke_grid = None
         self.heatmap_plot.setTitle(grid_name)
         self.heatmap_img.clear()
         if not self.recognizer.is_ready:
@@ -205,6 +224,33 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
             self.last_time = QtCore.QTime.currentTime()
             self.timer.start(self.FPS_LIMITS[fps_name])
 
+    def toggle_stroke_mode(self, checked: bool):
+        self.stroke_mode = checked
+        self.stroke_grid = None
+        if checked and self.background_frame is None:
+            self.prediction_label.setText("预测: 请先取背景")
+        elif not checked:
+            self.prediction_label.setText("预测: --")
+
+    def capture_background(self):
+        if self.region is None:
+            self.prediction_label.setText("预测: 请先选择区域")
+            return
+
+        frame = self.reader.capture(self.region)
+        if frame is None:
+            self.prediction_label.setText("预测: 取背景失败")
+            return
+
+        self.background_frame = frame.copy()
+        self.stroke_grid = np.zeros(self.grid_shape, dtype=np.int32)
+        self.prediction_label.setText("预测: 背景已采集")
+
+    def clear_stroke(self):
+        self.stroke_grid = np.zeros(self.grid_shape, dtype=np.int32)
+        self.heatmap_img.clear()
+        self.prediction_label.setText("预测: 笔画已清空")
+
     def update_frame(self):
         if self.region is None:
             return
@@ -213,7 +259,19 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         if frame is None:
             return
 
-        grid = self.reader.frame_to_grid(frame)
+        if self.stroke_mode:
+            if self.background_frame is None:
+                self.update_preview(frame)
+                self.prediction_label.setText("预测: 请先取背景")
+                return
+            diff_grid = self.reader.frame_difference_to_grid(frame, self.background_frame)
+            if self.stroke_grid is None or self.stroke_grid.shape != diff_grid.shape:
+                self.stroke_grid = np.zeros_like(diff_grid)
+            self.stroke_grid = np.maximum(self.stroke_grid, diff_grid)
+            grid = self.stroke_grid
+        else:
+            grid = self.reader.frame_to_grid(frame)
+
         # --- 修复1: 翻转热力图 ---
         flipped_grid = np.flipud(grid)
         self.heatmap_img.setImage(flipped_grid.T, levels=(0, 1000))

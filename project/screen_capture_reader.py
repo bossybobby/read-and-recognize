@@ -33,6 +33,8 @@ class CaptureRegion:
 
 
 class ScreenCaptureReader:
+    DIFF_NOISE_FLOOR = 18
+
     def __init__(self, grid_shape: Tuple[int, int] = (8, 8), value_mode: str = "gray"):
         self.grid_shape = grid_shape
         self.value_mode = value_mode
@@ -60,17 +62,7 @@ class ScreenCaptureReader:
         if frame is None or frame.size == 0:
             return np.zeros(self.grid_shape, dtype=np.int32)
 
-        # Extract the selected signal plane before resizing into the sensor grid.
-        if self.value_mode == "color-diff":
-            plane = self._color_difference_plane(frame)
-        elif self.value_mode == "value":
-            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-            plane = hsv[:, :, 2]
-        elif self.value_mode == "saturation":
-            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-            plane = hsv[:, :, 1]
-        else:  # 'gray' is default and usually best for shape
-            plane = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        plane = self._signal_plane(frame, self.value_mode)
 
         plane = cv2.GaussianBlur(plane, (3, 3), 0)
         grid = cv2.resize(
@@ -84,6 +76,58 @@ class ScreenCaptureReader:
         if max_value > 0:
             grid = grid / max_value
         return np.rint(grid * 1000).astype(np.int32)
+
+    def frame_difference_to_grid(
+        self,
+        frame: np.ndarray,
+        background: np.ndarray,
+        noise_floor: int | None = None,
+    ) -> np.ndarray:
+        if (
+            frame is None
+            or background is None
+            or frame.size == 0
+            or background.size == 0
+        ):
+            return np.zeros(self.grid_shape, dtype=np.int32)
+
+        if frame.shape != background.shape:
+            background = cv2.resize(
+                background,
+                (frame.shape[1], frame.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        current = self._signal_plane(frame, self.value_mode).astype(np.float32)
+        base = self._signal_plane(background, self.value_mode).astype(np.float32)
+        diff = np.abs(current - base)
+        floor = self.DIFF_NOISE_FLOOR if noise_floor is None else int(noise_floor)
+        diff = np.maximum(diff - floor, 0)
+
+        if diff.max() > 0:
+            diff = cv2.GaussianBlur(diff, (3, 3), 0)
+
+        grid = cv2.resize(
+            diff,
+            (self.grid_shape[1], self.grid_shape[0]),
+            interpolation=cv2.INTER_AREA,
+        )
+        return np.rint(np.clip(grid / 255.0, 0.0, 1.0) * 1000).astype(np.int32)
+
+    @classmethod
+    def _signal_plane(cls, frame: np.ndarray, value_mode: str) -> np.ndarray:
+        # Extract the selected signal plane before resizing into the sensor grid.
+        if value_mode == "color-diff":
+            return cls._color_difference_plane(frame)
+        if value_mode == "red-force":
+            return cls._red_force_plane(frame)
+        if value_mode == "value":
+            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+            return hsv[:, :, 2]
+        if value_mode == "saturation":
+            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+            return hsv[:, :, 1]
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
     @staticmethod
     def _color_difference_plane(frame: np.ndarray) -> np.ndarray:
@@ -108,3 +152,9 @@ class ScreenCaptureReader:
         if max_value > 0:
             diff = diff / max_value * 255.0
         return diff.astype(np.uint8)
+
+    @staticmethod
+    def _red_force_plane(frame: np.ndarray) -> np.ndarray:
+        frame_int = frame.astype(np.int16)
+        red_advantage = frame_int[:, :, 0] - np.maximum(frame_int[:, :, 1], frame_int[:, :, 2])
+        return np.clip(red_advantage, 0, 255).astype(np.uint8)
