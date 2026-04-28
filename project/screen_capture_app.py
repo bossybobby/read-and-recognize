@@ -70,6 +70,9 @@ class RegionSelector(QtWidgets.QWidget):
 
 
 class ScreenCaptureApp(QtWidgets.QMainWindow):
+    PREVIEW_UPDATE_INTERVAL = 3
+    DEBUG_SAVE_INTERVAL = 15
+
     GRID_SHAPES = {
         "8x8": (8, 8),
         "32x32": (32, 32),
@@ -79,6 +82,8 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         "10 FPS": 100,
         "30 FPS": 33,
         "60 FPS": 16,
+        "120 FPS": 8,
+        "240 FPS": 4,
         "无限": 0,
     }
 
@@ -95,6 +100,7 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         self.stroke_grid: Optional[np.ndarray] = None
         self.stroke_mode = False
         self.frame_count = 0
+        self.prediction_count = 0
         self.last_time = QtCore.QTime.currentTime()
 
         # 初始化数字识别器
@@ -103,8 +109,9 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         self._build_ui()
 
         self.timer = QtCore.QTimer(self)
+        self.timer.setTimerType(QtCore.Qt.PreciseTimer)
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(self.FPS_LIMITS["30 FPS"])
+        self.timer.start(self.FPS_LIMITS["无限"])
 
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -123,7 +130,7 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         self.grid_combo.addItems(self.GRID_SHAPES.keys())
         self.fps_combo = QtWidgets.QComboBox()
         self.fps_combo.addItems(self.FPS_LIMITS.keys())
-        self.fps_combo.setCurrentText("30 FPS")
+        self.fps_combo.setCurrentText("无限")
         self.region_label = QtWidgets.QLabel("区域: --")
         self.fps_label = QtWidgets.QLabel("FPS: --")
         self.frame_label = QtWidgets.QLabel("帧: 0")
@@ -277,7 +284,8 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         self.heatmap_img.setImage(flipped_grid.T, levels=(0, 1000))
         # --- 修复1结束 ---
 
-        self.update_preview(frame)
+        if self.frame_count % self.PREVIEW_UPDATE_INTERVAL == 0:
+            self.update_preview(frame)
 
         if not self.recognizer.is_ready:
             rows, cols = grid.shape
@@ -286,8 +294,10 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
             try:
                 input_array = np.array(grid, dtype=np.float32)
                 prediction, confidence = self.recognizer.predict(input_array)
-                debug_path = Path(__file__).resolve().parent / "debug_last_preprocessed.png"
-                self.recognizer.save_last_preprocessed(debug_path)
+                self.prediction_count += 1
+                if self.prediction_count % self.DEBUG_SAVE_INTERVAL == 0:
+                    debug_path = Path(__file__).resolve().parent / "debug_last_preprocessed.png"
+                    self.recognizer.save_last_preprocessed(debug_path)
                 self.prediction_label.setText(f"预测: {prediction} (置信度: {confidence:.2f})")
             except Exception as e:
                 self.prediction_label.setText(f"预测错误: {str(e)}")
@@ -311,7 +321,11 @@ class ScreenCaptureApp(QtWidgets.QMainWindow):
         target_h = max(1, self.preview_label.height())
         scale = min(target_w / w, target_h / h)
         size = (max(1, int(w * scale)), max(1, int(h * scale)))
-        preview = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+        if frame.shape[2] == 4:
+            preview_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+        else:
+            preview_frame = frame
+        preview = cv2.resize(preview_frame, size, interpolation=cv2.INTER_AREA)
         qimage = QtGui.QImage(
             preview.data,
             preview.shape[1],

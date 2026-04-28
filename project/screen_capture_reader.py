@@ -53,7 +53,7 @@ class ScreenCaptureReader:
                 "height": region.height,
             }
             shot = np.asarray(self._mss.grab(monitor))
-            return cv2.cvtColor(shot, cv2.COLOR_BGRA2RGB)
+            return shot
 
         box = (region.left, region.top, region.left + region.width, region.top + region.height)
         return np.asarray(ImageGrab.grab(box))
@@ -122,16 +122,27 @@ class ScreenCaptureReader:
         if value_mode == "red-force":
             return cls._red_force_plane(frame)
         if value_mode == "value":
-            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+            hsv = cls._to_hsv(frame)
             return hsv[:, :, 2]
         if value_mode == "saturation":
-            hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+            hsv = cls._to_hsv(frame)
             return hsv[:, :, 1]
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
         return cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+
+    @staticmethod
+    def _to_hsv(frame: np.ndarray) -> np.ndarray:
+        if frame.shape[2] == 4:
+            bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            return cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        return cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
     @staticmethod
     def _color_difference_plane(frame: np.ndarray) -> np.ndarray:
         frame_float = frame.astype(np.float32)
+        if frame_float.shape[2] == 4:
+            frame_float = frame_float[:, :, :3]
         height, width, _ = frame_float.shape
         border_size = max(1, min(height, width) // 20)
 
@@ -156,5 +167,13 @@ class ScreenCaptureReader:
     @staticmethod
     def _red_force_plane(frame: np.ndarray) -> np.ndarray:
         frame_int = frame.astype(np.int16)
-        red_advantage = frame_int[:, :, 0] - np.maximum(frame_int[:, :, 1], frame_int[:, :, 2])
+        if frame_int.shape[2] == 4:
+            red = frame_int[:, :, 2]
+            green = frame_int[:, :, 1]
+            blue = frame_int[:, :, 0]
+        else:
+            red = frame_int[:, :, 0]
+            green = frame_int[:, :, 1]
+            blue = frame_int[:, :, 2]
+        red_advantage = red - np.maximum(green, blue)
         return np.clip(red_advantage, 0, 255).astype(np.uint8)
